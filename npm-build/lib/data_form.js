@@ -9,6 +9,7 @@ var _ = require('underscore'),
   url = require('url'),
   mongoose = require('mongoose'),
   debug = false;
+  _.mixin(require('underscore.nested'));
 
 mongoose.set('debug', debug);
 
@@ -671,7 +672,7 @@ DataForm.prototype.reportInternal = function (req, resource, schema, options, ca
   });
 };
 
-DataForm.prototype.saveAndRespond = function (req, res, hiddenFields) {
+DataForm.prototype.saveAndRespond = function (req, res, hiddenFields, references) {
 
   function internalSave(doc) {
     doc.save(function (err, doc2) {
@@ -682,6 +683,8 @@ DataForm.prototype.saveAndRespond = function (req, res, hiddenFields) {
         } else {
           extend(err2, err);
         }
+
+        console.log('Error saving record: ' + JSON.stringify(err2));
         if (debug) {
           console.log('Error saving record: ' + JSON.stringify(err2));
         }
@@ -692,6 +695,16 @@ DataForm.prototype.saveAndRespond = function (req, res, hiddenFields) {
           if (doc2.hasOwnProperty(hiddenField)) {
             delete doc2[hiddenField];
           }
+        }
+
+        // remove populated references
+        if(references) {
+          _.each(references, function(pathname) {
+            var current = _.getNested(doc2, pathname);
+            if(current && current.hasOwnProperty('_id')) {
+              _.setNested(doc2, pathname, String(current._id));
+            }
+          });
         }
         res.send(doc2);
       }
@@ -941,15 +954,28 @@ DataForm.prototype.entityPut = function () {
       req.doc[name] = (value === '') ? undefined : value;
     });
 
+    // Since populated ObjectId references are not handled correctly on the client we have to "de-populate" them before
+    // sending back the object to the client
+    var referenceObjectPaths = [];
+    if (req.resource.options.paths !== undefined) {
+      _.each(req.resource.options.paths, function(path, pathname) {
+        if(path.options.ref) {
+          referenceObjectPaths.push(pathname);
+        }
+      });
+    }
+    console.log(referenceObjectPaths);
+
+    var hiddenFields = {};
     if (req.resource.options.hide !== undefined) {
-      var hiddenFields = this.generateHiddenFields(req.resource, true);
+      hiddenFields = this.generateHiddenFields(req.resource, true);
       hiddenFields._id = false;
       req.resource.model.findById(req.doc._id, hiddenFields, {lean: true}, function (err, data) {
         that.replaceHiddenFields(req.doc, data);
-        that.saveAndRespond(req, res, hiddenFields);
+        that.saveAndRespond(req, res, hiddenFields, referenceObjectPaths);
       });
     } else {
-      that.saveAndRespond(req, res);
+      that.saveAndRespond(req, res, hiddenFields, referenceObjectPaths);
     }
   }, this);
 };
